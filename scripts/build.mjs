@@ -19,7 +19,6 @@ await build({
   platform: 'node',
   format: 'esm',
   target: 'node22',
-  external: ['web-tree-sitter'],
   legalComments: 'none',
   logLevel: 'info',
 })

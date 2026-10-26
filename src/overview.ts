@@ -125,6 +125,7 @@ export function createCodeOverview(options: CodeOverviewOptions = {}) {
   const graphs = new Map<string, Graph>()
   const lastGood = new Map<string, string>()
   const lastHeadCheck = new Map<string, number>()
+  const lastRender = new Map<string, { key: string, text: string }>()
 
   function graphFor(cwd: string): Graph {
     const existing = graphs.get(cwd)
@@ -171,10 +172,14 @@ export function createCodeOverview(options: CodeOverviewOptions = {}) {
       try {
         const graph = graphFor(cwd)
         const meta = readProjectMeta(graph.db)
+        const cacheKey = `${String(meta?.indexedAt ?? 0)}:${meta?.head ?? ''}:${String(status.state)}:${String(limit)}`
+        const cached = lastRender.get(cwd)
+        if (cached !== undefined && cached.key === cacheKey) return { text: cached.text, graph: true }
         const overview = projectOverview(graph, limit)
         const text = renderOverviewBlock(overview, status.state === 'stale' ? 'stale' : 'current', meta, limit)
         if (text === '') return { text: '', graph: false }
         lastGood.set(cwd, text)
+        lastRender.set(cwd, { key: cacheKey, text })
         checkFreshness(cwd)
         return { text, graph: true }
       } catch {
@@ -186,6 +191,7 @@ export function createCodeOverview(options: CodeOverviewOptions = {}) {
       for (const graph of graphs.values()) { try { graph.close() } catch { /* already closed */ } }
       graphs.clear()
       lastGood.clear()
+      lastRender.clear()
       lastHeadCheck.clear()
     },
   }
