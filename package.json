@@ -1,7 +1,7 @@
 {
   "name": "dsh-workspace-docs",
-  "version": "0.3.1",
-  "description": "把当前工作区的顶层文件夹名与 README/文档类文件清单注入模型可见的运行时上下文；每次请求检测目录变化，变了才重扫，让 agent 不必盲搜就能找到既有文档。",
+  "version": "0.4.0",
+  "description": "把当前工作区的文件/文档清单与代码图概览（入口候选、核心符号）注入模型可见的运行时上下文；索引后台增量维护，未就绪时回退文件清单。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -10,8 +10,11 @@
   },
   "files": [
     "index.js",
+    "lib",
+    "grammars/*.wasm",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "NOTICE"
   ],
   "dsh": {
     "bundle": {
@@ -19,7 +22,17 @@
     }
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "web-tree-sitter": "^0.27.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   },
   "keywords": [
     "dsh",
@@ -27,7 +40,8 @@
     "dsh-plugin",
     "workspace",
     "documentation",
-    "context"
+    "context",
+    "code-graph"
   ],
   "author": "Nova & 辉宝主人",
   "license": "MIT"

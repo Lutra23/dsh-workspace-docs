@@ -17,6 +17,8 @@
 import { readdirSync, statSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+// 代码图半边：vendored codegraph 核心 + 本仓适配器，构建产物在 lib/overview.js。
+import { createCodeOverview } from './lib/overview.js'
 
 export const name = 'dsh-workspace-docs'
 export const inject = ['systemPrompt', 'workingDirectory']
@@ -168,21 +170,26 @@ function scanWorkspace(cwd, config) {
   return { cwd, dirs: keptDirs, files: keptFiles, rootDocs, dirDocs, overflow, totalVisible, scanned }
 }
 
-/** 把扫描结果渲染成注入用的 Markdown 文本。 */
-function renderScan(scan, config) {
+/**
+ * 把扫描结果渲染成注入用的 Markdown 文本。
+ * @param compact - 代码图概览已经占头部时收紧清单：不列非文档文件，目录限 12 个。
+ */
+function renderScan(scan, config, compact = false) {
   const lines = []
-  lines.push('当前工作区文件概览（由 dsh-workspace-docs 自动生成，只列文件名，未读内容）：')
+  lines.push(compact ? '文档与目录（dsh-workspace-docs 自动生成，只列名字）：' : '当前工作区文件概览（由 dsh-workspace-docs 自动生成，只列文件名，未读内容）：')
   lines.push(`工作目录：${scan.cwd}`)
   lines.push('')
 
-  if (scan.dirs.length > 0) {
+  const dirs = compact ? scan.dirs.slice(0, 12) : scan.dirs
+  if (dirs.length > 0) {
     lines.push(`顶层文件夹（${scan.dirs.length} 个）：`)
-    for (const dirName of scan.dirs) lines.push(`- ${dirName}/`)
+    for (const dirName of dirs) lines.push(`- ${dirName}/`)
+    if (dirs.length < scan.dirs.length) lines.push(`  （还有 ${scan.dirs.length - dirs.length} 个目录未列出）`)
     lines.push('')
   }
 
-  // 已归入「顶层文档」的文件不再重复列一遍。
-  const otherFiles = scan.files.filter((fileName) => !scan.rootDocs.includes(fileName))
+  // 已归入「顶层文档」的文件不再重复列一遍。图概览在场时省略非文档文件，省字节。
+  const otherFiles = compact ? [] : scan.files.filter((fileName) => !scan.rootDocs.includes(fileName))
   if (otherFiles.length > 0) {
     lines.push(`顶层其他文件（${otherFiles.length} 个）：`)
     for (const fileName of otherFiles) lines.push(`- ${fileName}`)
@@ -229,6 +236,8 @@ function resolveConfig(config) {
     maxDocsPerDir: positiveInt(source.maxDocsPerDir, 12),
     maxBytes: positiveInt(source.maxBytes, 4000),
     order: Number.isFinite(source.order) ? source.order : 130,
+    graph: source.graph !== false,
+    overviewLimit: positiveInt(source.overviewLimit, 8),
     ignored: Array.isArray(source.ignored) && source.ignored.length > 0
       ? source.ignored.filter((entry) => typeof entry === 'string')
       : DEFAULT_IGNORED,
@@ -243,6 +252,7 @@ function resolveConfig(config) {
  */
 export function apply(ctx, config) {
   const resolved = resolveConfig(config)
+  const codeOverview = createCodeOverview({ enabled: resolved.graph, limit: resolved.overviewLimit, ignored: resolved.ignored })
 
   /** 诊断日志：日志通道不可用时静默。 */
   const log = (level, message) => {
@@ -269,6 +279,7 @@ export function apply(ctx, config) {
 
   /** 缓存上一次扫描结果，以及参与扫描的目录及其 mtime 快照。 */
   let cachedDir
+  let cachedCompact = false
   let cachedText = ''
   let watched = []
 
@@ -302,11 +313,12 @@ export function apply(ctx, config) {
    * 每次请求都先比对目录 mtime：没有任何增删改名就直接复用上次结果，
    * 有变化才重新扫盘，避免清单在会话中途变旧。
    */
-  function renderFor(dir) {
-    if (dir === cachedDir && unchanged()) return cachedText
+  function renderFor(dir, compact = false) {
+    if (dir === cachedDir && compact === cachedCompact && unchanged()) return cachedText
     try {
       const scan = scanWorkspace(dir, resolved)
-      cachedText = scan.totalVisible === 0 ? '' : renderScan(scan, resolved)
+      cachedText = scan.totalVisible === 0 ? '' : renderScan(scan, resolved, compact)
+      cachedCompact = compact
       watched = snapshot(scan.scanned) ?? []
       try {
         appendFileSync(join(tmpdir(), 'dsh-workspace-docs.log'),
@@ -344,7 +356,10 @@ export function apply(ctx, config) {
         // 只有拿到真实的会话工作目录才注入：回落进程目录会把无关的
         // profile 目录清单塞进别的 prompt，宁可不注入。
         if (typeof cwd !== 'string' || cwd.length === 0) return ''
-        return renderFor(cwd)
+        const overview = codeOverview.render(cwd)
+        const docs = renderFor(cwd, overview.graph)
+        const combined = [overview.text, docs].filter(Boolean).join('\n\n')
+        return truncateToBytes(combined, resolved.maxBytes)
       } catch (error) {
         try {
           appendFileSync(join(tmpdir(), 'dsh-workspace-docs.log'),
@@ -354,6 +369,10 @@ export function apply(ctx, config) {
       }
     },
   })
+
+  if (typeof ctx.effect === 'function') {
+    ctx.effect(() => () => codeOverview.dispose(), 'dsh-workspace-docs: code overview')
+  }
 
   log('info', '运行时上下文已注册')
 }
